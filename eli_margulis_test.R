@@ -1,49 +1,127 @@
 ## eli margulis trends test
-## november 15th, 2022
+# november 15th, 2022
+# jack tarricone
 
-library(BiocManager) # huge repo of packages used in the bio/genetics, we need it for our hdf5 reader
 library(rhdf5) # hdf5 reader from bioc, which is the format the margulis data is in
 library(terra) # foundational package of spatial data analysis with d
-library(data.table) # very useful package for working with dataframes and .csv data, much faster than base r
-
+library(ggmap) # basemaps
+library(ggplot2) # plotting package
 
 #set working directory
-setwd("/Users/jacktarricone/marg_data/")
+setwd("/Users/jacktarricone/ch1_margulis/")
 
-# list the two h5 files
-h5_list <-list.files(pattern = ".h5", full.names = TRUE)
-print(h5_list) # static and wy2015 SCA
+# list hdf swe files
+swe_list <-list.files("./swe/hdf", pattern = ".h5", full.names = TRUE)
+print(swe_list) # static and wy2015 SCA
 
-# set paths for st
-sca_path <-h5_list[1]
-static_path <-h5_list[2]
+# list static rasters
+static_list <-list.files("./static/rasters", pattern = ".tif", full.names = TRUE)
+print(static_list) # static and wy2015 SCA
 
+# set paths for wy1993
+swe_wy16_path <-swe_list[32]
 
-### list attributes for both files
-## sca
-h5ls(sca_path) # contains 3 groups: lat, long, and SCA
-h5readAttributes(sca_path, name = "SCA") # SCA units = %
+### list attributes for swe file
+h5ls(swe_wy16_path) # contains 3 groups: lat, long, and SCA
+h5readAttributes(swe_wy16_path, name = "SWE") # SWE units = mm
 
-# set file size
+# set parameters for read in
 nrow <-6601
 ncol <-5701
+dowy <-183 # april 1st (it's a leap year!)
 
-# static
-h5ls(static_path) # contains 6 groups: dem, pixel_area, lat, lon, x_coord, y_coord
-h5readAttributes(static_path, name = "DEM") # DEM units = m
-h5readAttributes(static_path, name = "PIXEL_AREA") # pixel_area units = m^2
-h5readAttributes(static_path, name = "lat") # lat units = decimal degrees (same for lon)
-h5readAttributes(static_path, name = "x_coordinate") # x_coord units = m
+# read in dowy 185 for wy98 as a matrix
+swe16_183_raw <- h5read(swe_wy16_path, 
+                        name = "/SWE",
+                        index = list(1:nrow,1:ncol,dowy))
 
-# read in 1 days SCA data as array
-system.time(swe86_185_raw <- h5read(sca_path, 
-                                    name = "/SCA",
-                                    index = list(1:nrow,1:ncol,185)))
+## bring in static rasters for georeferencing
+print(static_list)
+dem_path <-static_list[3] # select dem
+dem <-rast(dem_path) # load in raster
+dem # inspect
+plot(dem)
 
-# read in 1 days SWE data which is an array, or stack of matrixes
-system.time(swe86_185_raw <- h5read(hdf_file, "/SWE", index = list(1:6601,1:5701,185))) #read in SWE group
-class(swe86_185_raw) #inspect 
-dim(swe86_185_raw) #dimensions
+# define function for converting from array to raster with proper crs and extent from DEM
+# using WSG84 and lat/lon but not EPSG:4326.. need to look into that
+
+array_to_snrs_rast <-function(x){
+  
+  r <-rast(x) # convert from matrix to raster
+  values(r)[values(r) == -32768] <- NA # change the value using raster function values
+  ext(r) <-c(-123.3,-117.6,35.4,42)
+  crs(r) <-crs(dem)
+  return(r)
+  
+}
+
+# convert
+swe_rast <-array_to_snrs_rast(swe16_183_raw)
+swe_rast # inspect
+
+# test plot
+plot(swe_rast)
+
+# bring in yuba bear shp file
+yuba_shp <-vect("/Users/jacktarricone/dhvsm_swe/shp_files/Yuba-Bear_Watershed/Yuba-Bear_Watershed.shp")
+yuba_shp <-project(yuba_shp,swe_rast) # reproject to same as SWE rast
+yuba_shp
+
+# full plot test
+plot(swe_rast)
+plot(yuba_shp, add = TRUE)
+
+# crop, mask, and plot again
+swe_crop <-crop(swe_rast, ext(yuba_shp))
+swe_mc <-mask(swe_crop, yuba_shp)
+plot(swe_mc)
+plot(yuba_shp, add = TRUE)
+
+# convert to df for plotting
+swe_df <-as.data.frame(swe_mc, xy = TRUE)
+names(swe_df)[3] <-"swe_mm"
+head(swe_df)
+
+# convert shp file
+yuba_df <-as.data.frame(yuba_shp, xy = TRUE)
+head(yuba_)
+
+# set map extent
+ext(yuba_shp)
+loc <-c(-121.2,39,-120.2,40)
+
+# download google sat
+myMap <- get_map(location=loc,
+                 source="google", 
+                 maptype="satellite", 
+                 crop=TRUE)
+
+# see map, looks good
+ggmap(myMap)
+
+# set scale
+blues_scale <-RColorBrewer::brewer.pal(9, 'Blues')
+
+# single plot test before making gif
+ggmap(myMap) +
+  coord_equal()+
+  geom_raster(swe_df, mapping = aes(x,y, fill = swe_mm)) +
+  geom_polygon(data = yuba_shp, aes(x = long, y = lat, group = group), colour = "black", fill = NA)+
+  scale_fill_gradientn(colours = blues_scale, limits = c(0,1500), na.value="transparent") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+  labs(title = "Margulis SWE: 2016-04-01", fill = "SWE (mm)",
+       x="Lon (deg)", y="Lat (deg)")
+
+
+
+
+
+
+
+
+
+
+
 
 ## raster temp file settings
 # while doing these calculations theres a lot of garbage created
